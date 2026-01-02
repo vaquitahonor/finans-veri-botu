@@ -1,9 +1,11 @@
 import os
 import time
+import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 from selenium.webdriver.common.by import By
 
 def calistir(ticker):
@@ -17,39 +19,54 @@ def calistir(ticker):
 
     print(f"\n🚀 [ADIM 1/2] Veri çekme başlatılıyor: {ticker.upper()}")
     
-    # --- CHROME AYARLARI (SUNUCU İÇİN KRİTİK) ---
+    # --- CHROME AYARLARI (GÜÇLENDİRİLMİŞ) ---
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Ekransız mod (Görünmez tarayıcı)
+    chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    
-    # Sunucuda SSL hatası almamak için
     chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--ignore-ssl-errors')
+    
+    # Sunucuda (Linux) Chromium yolunu bulmaya çalış
+    # Streamlit Cloud genelde bu yola kurar
+    if os.path.exists("/usr/bin/chromium"):
+        chrome_options.binary_location = "/usr/bin/chromium"
+    elif os.path.exists("/usr/bin/chromium-browser"):
+         chrome_options.binary_location = "/usr/bin/chromium-browser"
 
+    driver = None
     try:
-        service = Service(ChromeDriverManager().install())
+        # Chrome Driver'ı otomatik kur ve başlat
+        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
     except Exception as e:
-        print(f"Driver başlatma hatası: {e}")
+        print(f"KRİTİK HATA: Driver başlatılamadı! Sebebi: {e}")
+        # İkinci deneme: Standart Chrome ile
+        try:
+            print("Standart Chrome deneniyor...")
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        except Exception as e2:
+             print(f"İkinci deneme de başarısız: {e2}")
+             return
+
+    if not driver:
         return
 
     try:
         base_url = "https://earningscall.biz"
         url = f"{base_url}/e/nasdaq/s/{ticker.lower()}"
         
-        try:
-            driver.get(url)
-            time.sleep(2)
-        except:
-            driver.get(url)
+        print(f"Siteye gidiliyor: {url}")
+        driver.get(url)
+        time.sleep(3) # Sayfanın yüklenmesi için biraz daha bekle
 
+        # 404 Kontrolü
         if "404" in driver.title or "Not Found" in driver.page_source:
             url = f"{base_url}/e/nyse/s/{ticker.lower()}"
             driver.get(url)
-            time.sleep(2)
+            time.sleep(3)
 
         links = []
         try:
@@ -61,8 +78,11 @@ def calistir(ticker):
         except:
             pass
 
-        print(f"✅ {len(links)} adet rapor bulundu. İndiriliyor...")
+        print(f"✅ {len(links)} adet rapor bulundu.")
 
+        if len(links) == 0:
+            print("HATA: Hiç link bulunamadı! Site engellemiş veya sayfa boş olabilir.")
+        
         for link in links:
             try:
                 if not link.startswith("http"): link = base_url + link
@@ -77,28 +97,22 @@ def calistir(ticker):
 
                 file_path = os.path.join(save_dir, filename)
                 
-                if os.path.exists(file_path):
-                    continue
-
                 driver.get(link)
-                # Sayfanın yüklenmesi için bekle
                 time.sleep(1)
                 page_text = driver.find_element(By.TAG_NAME, "body").text
                 
-                if len(page_text) < 1000 or "scheduled to happen" in page_text.lower():
+                if len(page_text) < 1000:
                     continue
                 
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(f"URL: {link}\nDATE: {time.strftime('%Y-%m-%d')}\n{'-'*50}\n\n{page_text}")
                 
-                print(f"  💾 İndirildi: {filename}")
-                time.sleep(0.5)
-
             except:
                 continue
 
     except Exception as e:
-        print(f"Hata: {e}")
+        print(f"İşlem Hatası: {e}")
     finally:
-        driver.quit()
-        print("✅ Veri çekme tamamlandı.\n")
+        if driver:
+            driver.quit()
+        print("✅ Veri çekme işlemi sonlandı.\n")
